@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod";
+import { z } from "zod"; //runtime input validation for MCP tool arguments
 import {
   S3Client,
   ListObjectsV2Command,
@@ -19,17 +19,24 @@ if (!BUCKET) {
 }
 
 const S3_ENDPOINT = process.env.S3_ENDPOINT?.trim();
+const REGION =process.env.AWS_REGION?.trim();
 
+if (!REGION) {
+  console.error("Missing required env var region");
+  process.exit(1);
+}
 const s3 = new S3Client({
-  region: process.env.AWS_REGION || "us-east-1",
+  region: REGION ,
   endpoint: S3_ENDPOINT || undefined,
   forcePathStyle: Boolean(S3_ENDPOINT),
 });
 
+
+//helper to generate a standardized MCP error res
 function userError(message: string) {
   return { content: [{ type: "text" as const, text: message }], isError: true };
 }
-
+//map of standard aws error for easy debugging
 function mapAwsError(err: any, context: string) {
   const name = err?.name;
   const status = err?.$metadata?.httpStatusCode;
@@ -48,6 +55,12 @@ function mapAwsError(err: any, context: string) {
   return userError(`Error: ${context}. ${msg}`);
 }
 
+
+
+/*
+AWS S3 GetObject returns the file body as a stream or other binary type
+this func normalizes it and converts the result into a UTF-8 string
+*/
 async function streamToString(body: any): Promise<string> {
   if (!body) return "";
 
@@ -77,6 +90,11 @@ async function streamToString(body: any): Promise<string> {
 
 const server = new McpServer({ name: "mcp-s3-bucket", version: "1.0.0" });
 
+/*
+this tool lists objects inside the configured bucket.
+supports prefix filtering for dummy file systen structure (ex festch all files in docs: docs/hello, docs/some-important-doc.. ) 
+supports pagination with ContinuationToken and maxKeys input < num of keys in bucket.
+*/
 server.registerTool(
   "list_objects",
   {
@@ -98,7 +116,7 @@ server.registerTool(
           ContinuationToken: continuationToken,
         }),
       );
-
+      //normalize aws response to cleaner structure
       const objects =
         out.Contents?.map((o) => ({
           key: o.Key ?? "",
@@ -114,6 +132,7 @@ server.registerTool(
         nextContinuationToken: out.NextContinuationToken,
       };
 
+      //make readable output shown in MCP clients
       const keyList =
         objects.length === 0
           ? "No objects found."
@@ -136,7 +155,7 @@ server.registerTool(
     }
   },
 );
-
+//retrieve file from bucket via key, binary files are rejected to avoid returning unreadable data to MCP clients
 server.registerTool(
   "get_object",
   {
@@ -150,8 +169,9 @@ server.registerTool(
     try {
       const out = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
 
-      const contentType = out.ContentType ?? "";
-      const isText =
+      const contentType = out.ContentType ?? ""; 
+      //isText check needed to ensure we only work with text file so utf-8 conversion works and not producing garbage 
+      const isText =                                      
         contentType.startsWith("text/") ||
         contentType.includes("json") ||
         contentType.includes("xml") ||
@@ -192,6 +212,8 @@ server.registerTool(
   },
 );
 
+
+//uplaod text content into the bucket at the specified key
 server.registerTool(
   "put_object",
   {
@@ -228,6 +250,7 @@ server.registerTool(
   },
 );
 
+//remove obj from the configured bucket
 server.registerTool(
   "delete_object",
   {
