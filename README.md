@@ -68,6 +68,12 @@ node dist/index.js
 The server listens for MCP requests via **stdio transport**.
 
 ---
+### If need to test locally:
+
+####   use mcp-inspector tool:
+
+npx @modelcontextprotocol/inspector node dist/index.js
+
 
 ## LocalStack Setup
 
@@ -93,8 +99,6 @@ aws --endpoint-url=http://localhost:4566
 
 
 ### Verify bucket contents:
-
-
 aws --endpoint-url=http://localhost:4566
  s3 ls s3://mcp-test-bucket/
 
