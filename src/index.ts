@@ -8,6 +8,7 @@ import {
   GetObjectCommand,
   PutObjectCommand,
   DeleteObjectCommand,
+  HeadObjectCommand,
 } from "@aws-sdk/client-s3";
 import { Readable } from "node:stream";
 
@@ -30,7 +31,6 @@ const s3 = new S3Client({
   endpoint: S3_ENDPOINT || undefined,
   forcePathStyle: Boolean(S3_ENDPOINT),
 });
-
 
 //helper to generate a standardized MCP error res
 function userError(message: string) {
@@ -116,6 +116,7 @@ server.registerTool(
           ContinuationToken: continuationToken,
         }),
       );
+
       //normalize aws response to cleaner structure
       const objects =
         out.Contents?.map((o) => ({
@@ -221,7 +222,7 @@ server.registerTool(
     description: "Upload text content to a key in the configured bucket.",
     inputSchema: {
       key: z.string().min(1, "key is required"),
-      bodyText: z.string(),
+      bodyText: z.string(), 
       contentType: z.string().optional(),
     },
   },
@@ -261,19 +262,65 @@ server.registerTool(
     },
   },
   async ({ key }) => {
+  const cleanKey = key.trim(); //prevent user error in key input
+
+  try {
     try {
-      await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
-
-      const structuredContent = { bucket: BUCKET, key, deleted: true };
-
+      await s3.send(
+        new HeadObjectCommand({//if key exsits, init delete in s3, else return nothing has been deleted.
+          Bucket: BUCKET,
+          Key: cleanKey,
+        }),
+      );
+    } catch {
       return {
-        content: [{ type: "text", text: `Deleted "${key}".` }],
-        structuredContent,
+        content: [
+          {
+            type: "text",
+            text: `Key "${cleanKey}" does not exist`,
+          },
+        ],
+        structuredContent: {
+          key: cleanKey,
+          existedBefore: false,
+          deleted: false,
+          skippedDelete: true,
+        },
       };
-    } catch (err) {
-      return mapAwsError(err, `deleting object "${key}"`);
     }
-  },
+
+    await s3.send(
+      new DeleteObjectCommand({
+        Bucket: BUCKET,
+        Key: cleanKey,
+      }),
+    );
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Deleted "${cleanKey}".`,
+        },
+      ],
+      structuredContent: {
+        key: cleanKey,
+        existedBefore: true,
+        deleted: true,
+        skippedDelete: false,
+      },
+    };
+  } catch (err: any) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: err?.message || String(err),
+        },
+      ],
+    };
+  }
+},
 );
 
 const transport = new StdioServerTransport();
